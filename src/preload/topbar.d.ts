@@ -28,6 +28,10 @@ interface TopBarAPI {
 
   // Sidebar
   toggleSidebar: () => Promise<void>;
+
+  // LLM offline mode
+  getOfflineMode: () => Promise<boolean>;
+  setOfflineMode: (enabled: boolean) => Promise<boolean>;
 }
 
 declare global {

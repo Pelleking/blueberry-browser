@@ -31,6 +31,11 @@ const topBarAPI = {
   // Sidebar
   toggleSidebar: () =>
     electronAPI.ipcRenderer.invoke("toggle-sidebar"),
+
+  // LLM offline mode
+  getOfflineMode: () => electronAPI.ipcRenderer.invoke("get-offline-mode"),
+  setOfflineMode: (enabled: boolean) =>
+    electronAPI.ipcRenderer.invoke("set-offline-mode", enabled),
 };
 
 // Use `contextBridge` APIs to expose Electron APIs to

@@ -2,6 +2,7 @@ import { WebContents } from "electron";
 import { streamText, type LanguageModel, type CoreMessage } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { anthropic } from "@ai-sdk/anthropic";
+import { checkAppleAvailability, createAppleLanguageModel } from "./providers/AppleOnDevice";
 import * as dotenv from "dotenv";
 import { join } from "path";
 import type { Window } from "./Window";
@@ -19,9 +20,14 @@ interface StreamChunk {
   isComplete: boolean;
 }
 
-type LLMProvider = "openai" | "anthropic";
+type OnlineProvider = "openai" | "anthropic";
+type LLMProvider = OnlineProvider | "apple";
 
-const DEFAULT_MODELS: Record<LLMProvider, string> = {
+type UserContentPart =
+  | { type: "image"; image: string }
+  | { type: "text"; text: string };
+
+const DEFAULT_MODELS: Record<OnlineProvider, string> = {
   openai: "gpt-4o-mini",
   anthropic: "claude-3-5-sonnet-20241022",
 };
@@ -32,18 +38,22 @@ const DEFAULT_TEMPERATURE = 0.7;
 export class LLMClient {
   private readonly webContents: WebContents;
   private window: Window | null = null;
-  private readonly provider: LLMProvider;
-  private readonly modelName: string;
-  private readonly model: LanguageModel | null;
+  private baseOnlineProvider: OnlineProvider;
+  private provider: LLMProvider;
+  private modelName: string | null = null;
+  private model: LanguageModel | null = null;
   private messages: CoreMessage[] = [];
+  private offlineMode: boolean;
+  private appleAvailabilityChecked: boolean = false;
+  private appleAvailable: boolean = false;
 
   constructor(webContents: WebContents) {
     this.webContents = webContents;
-    this.provider = this.getProvider();
+    this.baseOnlineProvider = this.getBaseOnlineProvider();
+    this.offlineMode = this.getInitialOfflineMode();
+    this.provider = this.offlineMode ? "apple" : this.baseOnlineProvider;
     this.modelName = this.getModelName();
-    this.model = this.initializeModel();
-
-    this.logInitializationStatus();
+    void this.initializeModel().then(() => this.logInitializationStatus());
   }
 
   // Set the window reference after construction to avoid circular dependencies
@@ -51,32 +61,96 @@ export class LLMClient {
     this.window = window;
   }
 
-  private getProvider(): LLMProvider {
+  // Public offline controls
+  getOfflineMode(): boolean {
+    return this.offlineMode;
+  }
+
+  async setOfflineMode(enabled: boolean): Promise<boolean> {
+    if (this.offlineMode === enabled) return this.offlineMode;
+
+    if (enabled) {
+      this.provider = "apple";
+      this.modelName = this.getModelName();
+      await this.initializeModel();
+      if (!this.model) {
+        // Not available; revert
+        this.provider = this.baseOnlineProvider;
+        this.modelName = this.getModelName();
+        await this.initializeModel();
+        this.offlineMode = false;
+        this.logInitializationStatus();
+        return false;
+      }
+      this.offlineMode = true;
+      this.logInitializationStatus();
+      return true;
+    }
+
+    // Disabling offline mode
+    this.provider = this.baseOnlineProvider;
+    this.modelName = this.getModelName();
+    await this.initializeModel();
+    this.offlineMode = false;
+    this.logInitializationStatus();
+    return false;
+  }
+
+  private getInitialOfflineMode(): boolean {
+    const fromEnv = (process.env.OFFLINE_MODE || "").toLowerCase();
+    const providerEnv = (process.env.LLM_PROVIDER || "").toLowerCase();
+    if (fromEnv === "1" || fromEnv === "true" || providerEnv === "apple") {
+      return true;
+    }
+    return false;
+  }
+
+  private getBaseOnlineProvider(): OnlineProvider {
     const provider = process.env.LLM_PROVIDER?.toLowerCase();
     if (provider === "anthropic") return "anthropic";
     return "openai"; // Default to OpenAI
   }
 
-  private getModelName(): string {
-    return process.env.LLM_MODEL || DEFAULT_MODELS[this.provider];
+  private getModelName(): string | null {
+    if (this.provider === "apple") return null; // Apple provider does not require model name
+    return process.env.LLM_MODEL || DEFAULT_MODELS[this.baseOnlineProvider];
   }
 
-  private initializeModel(): LanguageModel | null {
-    const apiKey = this.getApiKey();
-    if (!apiKey) return null;
+  private async initializeModel(): Promise<void> {
+    if (this.provider === "apple") {
+      if (!this.appleAvailabilityChecked) {
+        const availability = await checkAppleAvailability();
+        this.appleAvailable = availability.available;
+        this.appleAvailabilityChecked = true;
+      }
+      if (!this.appleAvailable) {
+        this.model = null;
+        return;
+      }
+      // appleAI integrates with Vercel AI SDK (modelId required)
+      this.model = createAppleLanguageModel();
+      return;
+    }
 
-    switch (this.provider) {
+    const apiKey = this.getApiKey();
+    if (!apiKey) {
+      this.model = null;
+      return;
+    }
+
+    switch (this.baseOnlineProvider) {
       case "anthropic":
-        return anthropic(this.modelName);
+        this.model = anthropic(this.modelName || DEFAULT_MODELS.anthropic);
+        break;
       case "openai":
-        return openai(this.modelName);
       default:
-        return null;
+        this.model = openai(this.modelName || DEFAULT_MODELS.openai);
+        break;
     }
   }
 
   private getApiKey(): string | undefined {
-    switch (this.provider) {
+    switch (this.baseOnlineProvider) {
       case "anthropic":
         return process.env.ANTHROPIC_API_KEY;
       case "openai":
@@ -87,13 +161,26 @@ export class LLMClient {
   }
 
   private logInitializationStatus(): void {
+    if (this.provider === "apple") {
+      if (this.model) {
+        console.log(
+          "✅ LLM Client initialized in OFFLINE mode using Apple on-device AI"
+        );
+      } else {
+        console.error(
+          "❌ LLM Client offline initialization failed: Apple on-device AI is not available on this system."
+        );
+      }
+      return;
+    }
+
     if (this.model) {
       console.log(
-        `✅ LLM Client initialized with ${this.provider} provider using model: ${this.modelName}`
+        `✅ LLM Client initialized with ${this.baseOnlineProvider} provider using model: ${this.modelName}`
       );
     } else {
       const keyName =
-        this.provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
+        this.baseOnlineProvider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
       console.error(
         `❌ LLM Client initialization failed: ${keyName} not found in environment variables.\n` +
           `Please add your API key to the .env file in the project root.`
@@ -103,6 +190,14 @@ export class LLMClient {
 
   async sendChatMessage(request: ChatRequest): Promise<void> {
     try {
+      if (this.provider === "apple" && (!this.model || !this.appleAvailable)) {
+        this.sendErrorMessage(
+          request.messageId,
+          "Apple on-device AI is unavailable. Ensure macOS with Apple Intelligence is enabled."
+        );
+        return;
+      }
+
       // Get screenshot from active tab if available
       let screenshot: string | null = null;
       if (this.window) {
@@ -118,7 +213,7 @@ export class LLMClient {
       }
 
       // Build user message content with screenshot first, then text
-      const userContent: any[] = [];
+      const userContent: UserContentPart[] = [];
       
       // Add screenshot as the first part if available
       if (screenshot) {
@@ -146,14 +241,15 @@ export class LLMClient {
       this.sendMessagesToRenderer();
 
       if (!this.model) {
-        this.sendErrorMessage(
-          request.messageId,
-          "LLM service is not configured. Please add your API key to the .env file."
-        );
+        const message =
+          this.provider === "apple"
+            ? "Apple on-device AI is unavailable."
+            : "LLM service is not configured. Please add your API key to the .env file.";
+        this.sendErrorMessage(request.messageId, message);
         return;
       }
 
-      const messages = await this.prepareMessagesWithContext(request);
+      const messages = await this.prepareMessagesWithContext();
       await this.streamResponse(messages, request.messageId);
     } catch (error) {
       console.error("Error in LLM request:", error);
@@ -170,11 +266,21 @@ export class LLMClient {
     return this.messages;
   }
 
+  // Inject a plain assistant message (e.g., notifications)
+  addAssistantMessage(content: string): void {
+    const assistantMessage: CoreMessage = {
+      role: "assistant",
+      content,
+    };
+    this.messages.push(assistantMessage);
+    this.sendMessagesToRenderer();
+  }
+
   private sendMessagesToRenderer(): void {
     this.webContents.send("chat-messages-updated", this.messages);
   }
 
-  private async prepareMessagesWithContext(_request: ChatRequest): Promise<CoreMessage[]> {
+  private async prepareMessagesWithContext(): Promise<CoreMessage[]> {
     // Get page context from active tab
     let pageUrl: string | null = null;
     let pageText: string | null = null;
@@ -238,19 +344,15 @@ export class LLMClient {
       throw new Error("Model not initialized");
     }
 
-    try {
-      const result = await streamText({
-        model: this.model,
-        messages,
-        temperature: DEFAULT_TEMPERATURE,
-        maxRetries: 3,
-        abortSignal: undefined, // Could add abort controller for cancellation
-      });
+    const result = await streamText({
+      model: this.model,
+      messages,
+      temperature: DEFAULT_TEMPERATURE,
+      maxRetries: 3,
+      abortSignal: undefined, // Could add abort controller for cancellation
+    });
 
-      await this.processStream(result.textStream, messageId);
-    } catch (error) {
-      throw error; // Re-throw to be handled by the caller
-    }
+    await this.processStream(result.textStream, messageId);
   }
 
   private async processStream(

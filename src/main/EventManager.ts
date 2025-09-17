@@ -22,6 +22,9 @@ export class EventManager {
     // Dark mode events
     this.handleDarkModeEvents();
 
+    // LLM events (offline mode)
+    this.handleLLMEvents();
+
     // Debug events
     this.handleDebugEvents();
   }
@@ -215,6 +218,25 @@ export class EventManager {
     // Dark mode broadcasting
     ipcMain.on("dark-mode-changed", (event, isDarkMode) => {
       this.broadcastDarkMode(event.sender, isDarkMode);
+    });
+  }
+
+  private handleLLMEvents(): void {
+    // Get current offline mode
+    ipcMain.handle("get-offline-mode", () => {
+      return this.mainWindow.sidebar.client.getOfflineMode();
+    });
+
+    // Toggle/set offline mode
+    ipcMain.handle("set-offline-mode", async (_evt, enabled: boolean) => {
+      const result = await this.mainWindow.sidebar.client.setOfflineMode(enabled);
+      if (enabled && !result) {
+        // Post a friendly assistant message into the chat
+        this.mainWindow.sidebar.client.addAssistantMessage(
+          "OOh I see what you are trying to do here Pelle but your mac is not up to spec for that hehe"
+        );
+      }
+      return result;
     });
   }
 
