@@ -1,0 +1,31 @@
+# Cursor rules: Enforce modular LLM structure
+
+files:
+  - pattern: "src/main/LLMClient.ts"
+    rules:
+      - "LLMClient must act as an orchestrator only. Do not implement provider selection, page scraping, or DOM scripts directly here."
+      - "Use PageInspector for any page info, link scraping, or screenshots."
+      - "Use shared types from src/main/common/types.ts (PageInfo, LINK_SCRAPE_JS)."
+      - "Prefer delegation to ModelManager, PromptBuilder, Tools, MessageStore, and Streamer (when available)."
+
+  - pattern: "src/main/BridgeServer.ts"
+    rules:
+      - "Do not redefine PageInfo. Import from src/main/common/types.ts."
+      - "When collecting page info, delegate to PageInspector."
+      - "Avoid duplicating DOM query strings. Use LINK_SCRAPE_JS."
+
+  - pattern: "src/main/page/PageInspector.ts"
+    rules:
+      - "All DOM scraping code should live here."
+      - "Expose helpers for getActivePageInfo, openUrlAndGetInfo, getScreenshot, and getInfoForTab."
+
+  - pattern: "src/main/common/types.ts"
+    rules:
+      - "Keep framework-agnostic types and constants shared by main modules."
+
+meta:
+  - "Prefer creating new helpers over copying code snippets."
+  - "Keep modules under ~300 LOC. If growing beyond, split."
+  - "Preserve existing indentation style and avoid unrelated reformatting."
+
+

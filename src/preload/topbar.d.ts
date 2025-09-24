@@ -32,6 +32,11 @@ interface TopBarAPI {
   // LLM offline mode
   getOfflineMode: () => Promise<boolean>;
   setOfflineMode: (enabled: boolean) => Promise<boolean>;
+  onOfflineModeUpdated: (callback: (enabled: boolean) => void) => void;
+  removeOfflineModeUpdatedListener: () => void;
+
+  // Bridge
+  generateBridgeQR: () => Promise<{ ok: boolean }>;
 }
 
 declare global {

@@ -108,6 +108,16 @@ export class Window {
     // Store the tab
     this.tabsMap.set(tabId, tab);
 
+    // Bridge: emit active tab URL on any navigation change
+    try {
+      tab.webContents.on("did-navigate", (_event, newUrl) => {
+        try { this._sideBar.client.notifyActiveTab(newUrl, tab.id); } catch {}
+      });
+      tab.webContents.on("did-navigate-in-page", (_event, newUrl) => {
+        try { this._sideBar.client.notifyActiveTab(newUrl, tab.id); } catch {}
+      });
+    } catch {}
+
     // If this is the first tab, make it active
     if (this.tabsMap.size === 1) {
       this.switchActiveTab(tabId);
@@ -171,6 +181,15 @@ export class Window {
 
     // Update the window title to match the tab title
     this._baseWindow.setTitle(tab.title || "Blueberry Browser");
+
+    try {
+      // Inform topbar/sidebar about active tab URL
+      const url = tab.url;
+      this._topBar.view.webContents.send("active-tab-url", { id: tab.id, url });
+      this._sideBar.view.webContents.send("active-tab-url", { id: tab.id, url });
+      // Also inform bridge via LLM client to reach mobile
+      this._sideBar.client.notifyActiveTab(url, tab.id);
+    } catch {}
 
     return true;
   }

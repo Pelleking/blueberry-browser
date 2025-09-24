@@ -1,8 +1,18 @@
 import { ipcMain, WebContents } from "electron";
+import os from "os";
+import jwt from "jsonwebtoken";
+import QRCode from "qrcode";
 import type { Window } from "./Window";
+import { registerTabsEvents } from "./events/TabsEvents";
+import { registerSidebarEvents } from "./events/SidebarEvents";
+import { registerPageContentEvents } from "./events/PageContentEvents";
+import { registerLLMEvents } from "./events/LLMEvents";
+import { registerSystemEvents } from "./events/SystemEvents";
 
 export class EventManager {
   private mainWindow: Window;
+  private networkInterval: NodeJS.Timeout | null = null;
+  private lastOnline: boolean | null = null;
 
   constructor(mainWindow: Window) {
     this.mainWindow = mainWindow;
@@ -10,23 +20,11 @@ export class EventManager {
   }
 
   private setupEventHandlers(): void {
-    // Tab management events
-    this.handleTabEvents();
-
-    // Sidebar events
-    this.handleSidebarEvents();
-
-    // Page content events
-    this.handlePageContentEvents();
-
-    // Dark mode events
-    this.handleDarkModeEvents();
-
-    // LLM events (offline mode)
-    this.handleLLMEvents();
-
-    // Debug events
-    this.handleDebugEvents();
+    registerTabsEvents(this.mainWindow);
+    registerSidebarEvents(this.mainWindow);
+    registerPageContentEvents(this.mainWindow);
+    registerLLMEvents(this.mainWindow);
+    registerSystemEvents(this.mainWindow);
   }
 
   private handleTabEvents(): void {
@@ -176,6 +174,12 @@ export class EventManager {
     ipcMain.handle("sidebar-get-messages", () => {
       return this.mainWindow.sidebar.client.getMessages();
     });
+
+    // Tool: open URL and summarize
+    ipcMain.handle("open-url-and-summarize", async (_evt, url: string) => {
+      await this.mainWindow.sidebar.client.openUrlAndSummarize(url);
+      return true;
+    });
   }
 
   private handlePageContentEvents(): void {
@@ -232,17 +236,122 @@ export class EventManager {
       const result = await this.mainWindow.sidebar.client.setOfflineMode(enabled);
       if (enabled && !result) {
         // Post a friendly assistant message into the chat
+        const reason = this.mainWindow.sidebar.client.getAppleUnavailableReason();
+        const suffix = reason ? ` (Reason: ${reason})` : "";
         this.mainWindow.sidebar.client.addAssistantMessage(
-          "OOh I see what you are trying to do here Pelle but your mac is not up to spec for that hehe"
+          `OOh I see what you are trying to do here Pelle but your mac is not up to spec for that hehe${suffix}`
         );
       }
+      this.broadcastOfflineMode(this.mainWindow.sidebar.client.getOfflineMode());
       return result;
+    });
+
+    // Generate QR for mobile bridge connection
+    ipcMain.handle("generate-bridge-qr", async () => {
+      try {
+        const publicUrl = process.env.BRIDGE_PUBLIC_URL;
+        const port = Number(process.env.BRIDGE_PORT || 4939);
+        const ip = this.getLocalIpAddress();
+        const url = publicUrl && publicUrl.trim() ? `${publicUrl.replace(/\/$/, "")}/bridge` : `ws://${ip}:${port}/bridge`;
+        const secret = process.env.BRIDGE_JWT_SECRET || "dev-secret";
+        const now = Math.floor(Date.now() / 1000);
+        const ttlSec = Number(process.env.BRIDGE_TOKEN_TTL_SEC || 300);
+        const token = jwt.sign(
+          { sub: "blueberry-mobile", iat: now, nbf: now, exp: now + (ttlSec > 0 ? ttlSec : 300) },
+          secret
+        );
+        const proto = `blueberry,v1,${token}`;
+        const payload = { url, proto };
+        const text = JSON.stringify(payload);
+        const dataUrl = await QRCode.toDataURL(text, { errorCorrectionLevel: "M", scale: 6 });
+        // Post a short instruction and the QR image
+        this.mainWindow.sidebar.client.addAssistantMessage(
+          [
+            "Scan this QR code with the Blueberry mobile app (expires in 5 minutes):",
+            "",
+            `![](${dataUrl})`,
+          ].join("\n")
+        );
+        return { ok: true };
+      } catch (e) {
+        console.error("Failed to generate QR:", e);
+        return { ok: false };
+      }
     });
   }
 
   private handleDebugEvents(): void {
     // Ping test
     ipcMain.on("ping", () => console.log("pong"));
+  }
+
+  private getLocalIpAddress(): string {
+    try {
+      const ifaces = os.networkInterfaces();
+      for (const name of Object.keys(ifaces)) {
+        const list = ifaces[name] || [];
+        for (const iface of list) {
+          if (!iface || iface.internal) continue;
+          if (iface.family === "IPv4" && iface.address) return iface.address;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return "127.0.0.1";
+  }
+
+  private broadcastOfflineMode(enabled: boolean): void {
+    // Notify topbar to update its icon state
+    this.mainWindow.topBar.view.webContents.send("offline-mode-updated", enabled);
+  }
+
+  private async isOnline(): Promise<boolean> {
+    return new Promise((resolve) => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const dns = require("dns");
+        let settled = false;
+        const done = (result: boolean): void => {
+          if (!settled) {
+            settled = true;
+            resolve(result);
+          }
+        };
+        const timer = setTimeout(() => done(false), 2000);
+        dns.resolve("example.com", (err: unknown) => {
+          clearTimeout(timer);
+          if (err) return done(false);
+          done(true);
+        });
+      } catch {
+        resolve(false);
+      }
+    });
+  }
+
+  private startNetworkMonitoring(): void {
+    if (this.networkInterval) return;
+    const check = async (): Promise<void> => {
+      const online = await this.isOnline();
+      if (this.lastOnline === null) {
+        this.lastOnline = online;
+        return;
+      }
+      if (!online && this.lastOnline !== false) {
+        // Went offline
+        const alreadyOffline = this.mainWindow.sidebar.client.getOfflineMode();
+        if (!alreadyOffline) {
+          const enabled = await this.mainWindow.sidebar.client.setOfflineMode(true);
+          this.broadcastOfflineMode(enabled);
+        }
+      }
+      this.lastOnline = online;
+    };
+    // Initial delay then poll
+    this.networkInterval = setInterval(check, 5000);
+    // Run first check immediately
+    void check();
   }
 
   private broadcastDarkMode(sender: WebContents, isDarkMode: boolean): void {
@@ -273,5 +382,9 @@ export class EventManager {
   // Clean up event listeners
   public cleanup(): void {
     ipcMain.removeAllListeners();
+    if (this.networkInterval) {
+      clearInterval(this.networkInterval);
+      this.networkInterval = null;
+    }
   }
 }

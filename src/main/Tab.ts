@@ -38,10 +38,12 @@ export class Tab {
     // Update URL when navigation occurs
     this.webContentsView.webContents.on("did-navigate", (_, url) => {
       this._url = url;
+      try { this.webContentsView.webContents.send("active-tab-url", { id: this._id, url }); } catch {}
     });
 
     this.webContentsView.webContents.on("did-navigate-in-page", (_, url) => {
       this._url = url;
+      try { this.webContentsView.webContents.send("active-tab-url", { id: this._id, url }); } catch {}
     });
   }
 
@@ -90,11 +92,11 @@ export class Tab {
   }
 
   async getTabHtml(): Promise<string> {
-    return await this.runJs("return document.documentElement.outerHTML");
+    return await this.runJs("document.documentElement.outerHTML");
   }
 
   async getTabText(): Promise<string> {
-    return await this.runJs("return document.documentElement.innerText");
+    return await this.runJs("document.documentElement.innerText");
   }
 
   loadURL(url: string): Promise<void> {

@@ -1,140 +1,166 @@
-import React, { useState, useEffect } from 'react'
-import { ArrowLeft, ArrowRight, RefreshCw, Loader2, PanelLeftClose, PanelLeft } from 'lucide-react'
-import { Cpu } from 'lucide-react'
-import { useBrowser } from '../contexts/BrowserContext'
-import { ToolBarButton } from '../components/ToolBarButton'
-import { Favicon } from '../components/Favicon'
-import { DarkModeToggle } from '../components/DarkModeToggle'
-import { cn } from '@common/lib/utils'
+import React, { useState, useEffect } from "react";
+import { ArrowLeft, ArrowRight, RefreshCw, Loader2, PanelLeftClose, PanelLeft } from "lucide-react";
+import { QrCode } from "lucide-react";
+import { Cpu } from "lucide-react";
+import { useBrowser } from "../contexts/BrowserContext";
+import { ToolBarButton } from "../components/ToolBarButton";
+import { Favicon } from "../components/Favicon";
+import { DarkModeToggle } from "../components/DarkModeToggle";
+import { cn } from "@common/lib/utils";
 
 export const AddressBar: React.FC = () => {
-    const { activeTab, navigateToUrl, goBack, goForward, reload, isLoading } = useBrowser()
-    const [url, setUrl] = useState('')
-    const [isEditing, setIsEditing] = useState(false)
-    const [isFocused, setIsFocused] = useState(false)
-    const [isSidebarOpen, setIsSidebarOpen] = useState(false)
-    const [offline, setOffline] = useState(false)
-    const [offlineBlinkError, setOfflineBlinkError] = useState(false)
+    const { activeTab, navigateToUrl, goBack, goForward, reload, isLoading } = useBrowser();
+    const [url, setUrl] = useState("");
+    const [isEditing, setIsEditing] = useState(false);
+    const [isFocused, setIsFocused] = useState(false);
+    const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+    const [offline, setOffline] = useState(false);
+    const [offlineBlinkError, setOfflineBlinkError] = useState(false);
+    const [bridgeConnected, setBridgeConnected] = useState(false);
 
     // Update URL when active tab changes
     useEffect(() => {
         if (activeTab && !isEditing) {
-            setUrl(activeTab.url || '')
+            setUrl(activeTab.url || "");
         }
-    }, [activeTab, isEditing])
+    }, [activeTab, isEditing]);
 
     // Load initial offline mode
     useEffect(() => {
-        let mounted = true
+        let mounted = true;
         if (window.topBarAPI?.getOfflineMode) {
-            window.topBarAPI.getOfflineMode().then(v => {
-                if (mounted) setOffline(!!v)
-            }).catch(() => {})
+            window.topBarAPI
+                .getOfflineMode()
+                .then((v) => {
+                    if (mounted) setOffline(!!v);
+                })
+                .catch(() => {});
         }
-        return () => { mounted = false }
-    }, [])
+        // Listen for offline mode updates (e.g., auto-switch when network is lost)
+        if (window.topBarAPI?.onOfflineModeUpdated) {
+            window.topBarAPI.onOfflineModeUpdated((enabled) => {
+                if (mounted) setOffline(!!enabled);
+            });
+        }
+        return () => {
+            mounted = false;
+        };
+    }, []);
 
-    const handleSubmit = (e: React.FormEvent) => {
-        e.preventDefault()
-        if (!url.trim()) return
+    // Listen for bridge connection status
+    useEffect(() => {
+        if (!window.topBarAPI?.onBridgeConnected) return;
+        window.topBarAPI.onBridgeConnected((connected) => setBridgeConnected(!!connected));
+        return () => window.topBarAPI?.removeBridgeConnectedListener?.();
+    }, []);
 
-        let finalUrl = url.trim()
+    const handleSubmit = (e: React.FormEvent): void => {
+        e.preventDefault();
+        if (!url.trim()) return;
+
+        let finalUrl = url.trim();
 
         // Add protocol if missing
-        if (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://')) {
+        if (!finalUrl.startsWith("http://") && !finalUrl.startsWith("https://")) {
             // Check if it looks like a domain
-            if (finalUrl.includes('.') && !finalUrl.includes(' ')) {
-                finalUrl = `https://${finalUrl}`
+            if (finalUrl.includes(".") && !finalUrl.includes(" ")) {
+                finalUrl = `https://${finalUrl}`;
             } else {
                 // Treat as search query
-                finalUrl = `https://www.google.com/search?q=${encodeURIComponent(finalUrl)}`
+                finalUrl = `https://www.google.com/search?q=${encodeURIComponent(finalUrl)}`;
             }
         }
 
-        navigateToUrl(finalUrl)
-        setIsEditing(false)
-        setIsFocused(false)
-            ; (document.activeElement as HTMLElement)?.blur()
-    }
+        navigateToUrl(finalUrl);
+        setIsEditing(false);
+        setIsFocused(false);
+        (document.activeElement as HTMLElement)?.blur();
+    };
 
-    const handleFocus = () => {
-        setIsEditing(true)
-        setIsFocused(true)
-    }
+    const handleFocus = (): void => {
+        setIsEditing(true);
+        setIsFocused(true);
+    };
 
-    const handleBlur = () => {
-        setIsEditing(false)
-        setIsFocused(false)
+    const handleBlur = (): void => {
+        setIsEditing(false);
+        setIsFocused(false);
         // Reset to current tab URL if editing was cancelled
         if (activeTab) {
-            setUrl(activeTab.url || '')
+            setUrl(activeTab.url || "");
         }
-    }
+    };
 
-    const handleKeyDown = (e: React.KeyboardEvent) => {
-        if (e.key === 'Escape') {
-            setIsEditing(false)
-            setIsFocused(false)
+    const handleKeyDown = (e: React.KeyboardEvent): void => {
+        if (e.key === "Escape") {
+            setIsEditing(false);
+            setIsFocused(false);
             if (activeTab) {
-                setUrl(activeTab.url || '')
+                setUrl(activeTab.url || "");
             }
-            ; (e.target as HTMLInputElement).blur()
+            (e.target as HTMLInputElement).blur();
         }
-    }
+    };
 
-    const canGoBack = activeTab !== null
-    const canGoForward = activeTab !== null
+    const canGoBack = activeTab !== null;
+    const canGoForward = activeTab !== null;
 
     // Extract domain and title for display
-    const getDomain = () => {
-        if (!activeTab?.url) return ''
+    const getDomain = (): string => {
+        if (!activeTab?.url) return "";
         try {
-            const urlObj = new URL(activeTab.url)
-            return urlObj.hostname.replace('www.', '')
+            const urlObj = new URL(activeTab.url);
+            return urlObj.hostname.replace("www.", "");
         } catch {
-            return activeTab.url
+            return activeTab.url;
         }
-    }
+    };
 
-    const getPath = () => {
-        if (!activeTab?.url) return ''
+    const getPath = (): string => {
+        if (!activeTab?.url) return "";
         try {
-            const urlObj = new URL(activeTab.url)
-            return urlObj.pathname + urlObj.search + urlObj.hash
+            const urlObj = new URL(activeTab.url);
+            return urlObj.pathname + urlObj.search + urlObj.hash;
         } catch {
-            return ''
+            return "";
         }
-    }
+    };
 
-    const getFavicon = () => {
-        if (!activeTab?.url) return null
+    const getFavicon = (): string | null => {
+        if (!activeTab?.url) return null;
         try {
-            const domain = new URL(activeTab.url).hostname
-            return `https://www.google.com/s2/favicons?domain=${domain}&sz=32`
+            const domain = new URL(activeTab.url).hostname;
+            return `https://www.google.com/s2/favicons?domain=${domain}&sz=32`;
         } catch {
-            return null
+            return null;
         }
-    }
+    };
 
-    const toggleSidebar = () => {
-        setIsSidebarOpen(!isSidebarOpen)
+    const toggleSidebar = (): void => {
+        setIsSidebarOpen(!isSidebarOpen);
         // Send IPC event to toggle sidebar
         if (window.topBarAPI) {
-            window.topBarAPI.toggleSidebar()
+            window.topBarAPI.toggleSidebar();
         }
-    }
+    };
 
-    const toggleOffline = async () => {
-        if (!window.topBarAPI?.setOfflineMode) return
-        const next = !offline
-        const confirmed = await window.topBarAPI.setOfflineMode(next)
-        setOffline(!!confirmed)
+    const toggleOffline = async (): Promise<void> => {
+        if (!window.topBarAPI?.setOfflineMode) return;
+        const next = !offline;
+        const confirmed = await window.topBarAPI.setOfflineMode(next);
+        setOffline(!!confirmed);
         if (next && !confirmed) {
             // Blink the icon red briefly
-            setOfflineBlinkError(true)
-            setTimeout(() => setOfflineBlinkError(false), 1200)
+            setOfflineBlinkError(true);
+            setTimeout(() => setOfflineBlinkError(false), 1200);
         }
-    }
+    };
+
+    const generateBridgeQR = async (): Promise<void> => {
+        try {
+            await window.topBarAPI?.generateBridgeQR?.();
+        } catch {}
+    };
 
     return (
         <>
@@ -224,10 +250,15 @@ export const AddressBar: React.FC = () => {
             <div className="flex items-center gap-1 app-region-no-drag">
                 <DarkModeToggle />
                 <ToolBarButton
+                    Icon={QrCode}
+                    onClick={generateBridgeQR}
+                    className={bridgeConnected ? "text-green-500" : undefined}
+                />
+                <ToolBarButton
                     Icon={Cpu}
                     onClick={toggleOffline}
                     toggled={offline}
-                    className={offlineBlinkError ? "text-red-500" : undefined}
+                    className={offlineBlinkError ? "text-red-500" : (offline ? "text-green-500" : undefined)}
                 />
                 <ToolBarButton
                     Icon={isSidebarOpen ? PanelLeftClose : PanelLeft}
@@ -236,5 +267,5 @@ export const AddressBar: React.FC = () => {
                 />
             </div>
         </>
-    )
-}
+    );
+};

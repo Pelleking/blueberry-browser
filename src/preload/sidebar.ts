@@ -52,6 +52,9 @@ const sidebarAPI = {
 
   // Tab information
   getActiveTabInfo: () => electronAPI.ipcRenderer.invoke("get-active-tab-info"),
+
+  // Tools: open URL in new tab and summarize
+  openUrlAndSummarize: (url: string) => electronAPI.ipcRenderer.invoke("open-url-and-summarize", url),
 };
 
 // Use `contextBridge` APIs to expose Electron APIs to

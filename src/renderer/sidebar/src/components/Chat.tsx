@@ -19,18 +19,33 @@ interface Message {
 const useAutoScroll = (messages: Message[]) => {
     const scrollRef = useRef<HTMLDivElement>(null)
     const prevCount = useRef(0)
+    const lastMsgId = useRef<string | null>(null)
+    const lastMsgLen = useRef<number>(0)
 
     useLayoutEffect(() => {
-        if (messages.length > prevCount.current) {
-            setTimeout(() => {
-                scrollRef.current?.scrollIntoView({
-                    behavior: 'smooth',
-                    block: 'end'
-                })
-            }, 100)
+        const doScroll = () => {
+            scrollRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
         }
+
+        // Scroll on new message added
+        if (messages.length > prevCount.current) {
+            setTimeout(doScroll, 100)
+        } else if (messages.length > 0) {
+            // Also scroll if the latest message grows (streaming)
+            const last = messages[messages.length - 1]
+            const len = (last?.content || '').length
+            if (lastMsgId.current === last?.id) {
+                if (len > lastMsgLen.current) setTimeout(doScroll, 50)
+            } else {
+                // Last message replaced -> scroll as well
+                setTimeout(doScroll, 50)
+            }
+            lastMsgId.current = last?.id || null
+            lastMsgLen.current = len
+        }
+
         prevCount.current = messages.length
-    }, [messages.length])
+    }, [messages])
 
     return scrollRef
 }
@@ -76,7 +91,7 @@ const StreamingText: React.FC<{ content: string }> = ({ content }) => {
 
 // Markdown Renderer Component
 const Markdown: React.FC<{ content: string }> = ({ content }) => (
-    <div className="prose prose-sm dark:prose-invert max-w-none 
+    <div className="prose prose-sm dark:prose-invert max-w-none break-words
                     prose-headings:text-foreground prose-p:text-foreground 
                     prose-strong:text-foreground prose-ul:text-foreground 
                     prose-ol:text-foreground prose-li:text-foreground
@@ -87,6 +102,8 @@ const Markdown: React.FC<{ content: string }> = ({ content }) => (
                     prose-pre:rounded-lg prose-pre:overflow-x-auto">
         <ReactMarkdown
             remarkPlugins={[remarkGfm, remarkBreaks]}
+            // Allow data: URIs for inline QR code images
+            urlTransform={(url) => url}
             components={{
                 // Custom code block styling
                 code: ({ node, className, children, ...props }) => {
@@ -106,6 +123,7 @@ const Markdown: React.FC<{ content: string }> = ({ content }) => (
                     <a
                         href={href}
                         className="text-primary hover:underline"
+                        style={{ wordBreak: 'break-all', overflowWrap: 'anywhere' }}
                         target="_blank"
                         rel="noopener noreferrer"
                     >
