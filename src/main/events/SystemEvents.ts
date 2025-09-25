@@ -20,15 +20,17 @@ async function isOnline(): Promise<boolean> {
   });
 }
 
-export function registerSystemEvents(mainWindow: Window): void {
+export function registerSystemEvents(mainWindow: Window): () => void {
   let networkInterval: NodeJS.Timeout | null = null;
   let lastOnline: boolean | null = null;
 
-  ipcMain.on("dark-mode-changed", (event, isDarkMode) => {
+  const onDarkModeChanged = (event: Electron.IpcMainEvent, isDarkMode: boolean): void => {
     broadcastDarkMode(mainWindow, event.sender, isDarkMode);
-  });
+  };
+  ipcMain.on("dark-mode-changed", onDarkModeChanged);
 
-  ipcMain.on("ping", () => console.log("pong"));
+  const onPing = (): void => console.log("pong");
+  ipcMain.on("ping", onPing);
 
   if (!networkInterval) {
     const check = async (): Promise<void> => {
@@ -46,6 +48,11 @@ export function registerSystemEvents(mainWindow: Window): void {
     networkInterval = setInterval(check, 5000);
     void check();
   }
+  return (): void => {
+    try { if (networkInterval) { clearInterval(networkInterval); networkInterval = null; } } catch {}
+    try { ipcMain.removeListener("dark-mode-changed", onDarkModeChanged); } catch {}
+    try { ipcMain.removeListener("ping", onPing); } catch {}
+  };
 }
 
 function broadcastDarkMode(mainWindow: Window, sender: WebContents, isDarkMode: boolean): void {
